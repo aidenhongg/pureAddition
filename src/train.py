@@ -70,10 +70,12 @@ def evaluate_loss(
 ) -> float:
     """Mean cross-entropy over a dataloader (prompt-masked via IGNORE_INDEX)."""
     model.eval()
+    amp_enabled = device.type == "cuda"
     total_loss, n = 0.0, 0
     for x, y in loader:
         x, y = x.to(device), y.to(device)
-        loss = model.compute_loss(x, y)
+        with torch.amp.autocast("cuda", enabled=amp_enabled):
+            loss = model.compute_loss(x, y)
         total_loss += loss.item() * x.size(0)
         n += x.size(0)
     return total_loss / n
@@ -129,8 +131,9 @@ def _log_model_attrs(model: AdditionLM, device: torch.device) -> None:
     log.info("─── Model ───")
     log.info("  Device:          %s", device)
     log.info("  Parameters:      %s", f"{model.param_count():,}")
-    log.info("  Layers:          %d", model.transformer.num_layers)
-    log.info("  d_model:         %d", model.tok_emb.embedding_dim)
+    log.info("  Layers:          %d", len(model.blocks))
+    log.info("  d_emb:           %d", model.tok_emb.embedding_dim)
+    log.info("  d_model:         %d", model.d_model)
     log.info("  max_seq_len:     %d", model.max_seq_len)
     log.info("  Vocab size:      %d", model.tok_emb.num_embeddings)
     log.info("─────────────")
@@ -172,9 +175,9 @@ def train(cfg: dict) -> AdditionLM:
 
     # ── Tokenizer ────────────────────────────────────────────────────────
     texts = collect_texts(datasets, max_texts=50_000, seed=cfg["seed"])
-    enc = build_tokenizer(texts, max_vocab_size=cfg["vocab_size"])
-    cfg["vocab_size"] = enc.n_vocab  # actual size after fitting
-    log.info("Tokenizer: %d vocab (%d n-gram merges)", enc.n_vocab, enc.n_vocab - 256)
+    enc = build_tokenizer(texts, vocab_size=cfg["vocab_size"])
+    cfg["vocab_size"] = enc.n_vocab
+    log.info("Tokenizer: %d vocab (WordPiece)", enc.n_vocab)
 
     ds = MathCoTDataset(
         datasets=datasets,
@@ -201,15 +204,17 @@ def train(cfg: dict) -> AdditionLM:
         d_ff=cfg["d_ff"],
         max_seq_len=cfg["max_seq_len"],
         dropout=cfg["dropout"],
+        d_emb=cfg["d_emb"],
     ).to(device)
     _log_model_attrs(model, device)
 
     # ── Optimiser & scheduler ────────────────────────────────────────────
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=cfg["lr"], weight_decay=cfg["weight_decay"]
+        model.param_groups(cfg["weight_decay"]), lr=cfg["lr"]
     )
     total_steps = len(train_loader) * cfg["max_epochs"]
     scheduler = get_lr_scheduler(optimizer, cfg["warmup_steps"], total_steps)
+    scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
 
     # ── Checkpointing & early stopping ───────────────────────────────────
     tmp_ckpt_dir = Path("src") / "checkpoints" / "_running"
@@ -229,12 +234,16 @@ def train(cfg: dict) -> AdditionLM:
 
         for batch_idx, (x, y) in enumerate(train_loader, 1):
             x, y = x.to(device), y.to(device)
-            loss = model.compute_loss(x, y)
+
+            with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
+                loss = model.compute_loss(x, y)
 
             optimizer.zero_grad(set_to_none=True)
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["grad_clip"])
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
             scheduler.step()
 
             batch_loss = loss.item()
