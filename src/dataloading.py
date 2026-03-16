@@ -128,7 +128,7 @@ def collect_texts(
 ) -> list[str]:
     """Extract raw text from all data sources for tokenizer vocabulary building."""
     texts: list[str] = []
-    for a, b, op in datasets["math_equations"]:
+    for a, b, op in datasets.get("math_equations", []):
         ex = CoTFormatter.format(a, b, op)
         texts.append(ex.full_text)
     for split in datasets["math_stories"].values():
@@ -143,14 +143,46 @@ def collect_texts(
     return texts
 
 
+# ── Equation generation ──────────────────────────────────────────────────────
+
+
+def generate_math_equations(
+    n: int, max_operand: int, seed: int
+) -> list[tuple[int, int, str]]:
+    """Generate *n* random ``(a, b, op)`` tuples using a seeded PRNG."""
+    rng = random.Random(seed)
+    equations: list[tuple[int, int, str]] = []
+    for _ in range(n // 2):
+        a = rng.randint(0, max_operand)
+        b = rng.randint(0, max_operand)
+        equations.append((a, b, "+"))
+        equations.append((a, b, "-"))
+    return equations
+
+
+def _tokenize_pair(
+    enc, prompt: str, answer: str, max_seq_len: int
+) -> tuple[Tensor, Tensor] | None:
+    """Tokenize a (prompt, answer) pair with prompt-masking on the target."""
+    full_tokens = enc.encode(prompt + answer)
+    if len(full_tokens) > max_seq_len:
+        return None
+    prompt_len = len(enc.encode(prompt))
+    tokens = torch.tensor(full_tokens, dtype=torch.long)
+    inp = tokens[:-1]
+    tgt = tokens[1:].clone()
+    if prompt_len > 1:
+        tgt[: prompt_len - 1] = IGNORE_INDEX
+    return inp, tgt
+
+
 # ── Dataset ──────────────────────────────────────────────────────────────────
 
 
 class MathCoTDataset(Dataset):
-    """Unified dataset aggregating multiple sources into tokenised (prompt, answer) pairs.
+    """Tokenised (prompt, answer) pairs from story datasets.
 
     Sources:
-    - ``math_equations``: ``(a, b, op)`` tuples → CoT-formatted with reasoning traces
     - ``math_stories``: HF dataset with question fields → prompt / answer pairs
     - ``tiny_stories``: HF dataset with text → split in half as prompt / answer
 
@@ -167,39 +199,53 @@ class MathCoTDataset(Dataset):
         self.inputs: list[Tensor] = []
         self.targets: list[Tensor] = []
 
-        for a, b, op in datasets["math_equations"]:
-            ex = CoTFormatter.format(a, b, op)
-            self._add(enc, ex.prompt, ex.reasoning + ex.answer, max_seq_len)
-
         for split in datasets["math_stories"].values():
             for row in split:
                 answer = str(row["answer"])
-                self._add(enc, row["story_1_qs"] + "\n", answer, max_seq_len)
+                pair = _tokenize_pair(enc, row["story_1_qs"] + "\n", answer, max_seq_len)
+                if pair:
+                    self.inputs.append(pair[0])
+                    self.targets.append(pair[1])
 
         for split in datasets["tiny_stories"].values():
             for row in split:
                 text = row["text"]
                 mid = len(text) // 2
                 if mid > 0:
-                    self._add(enc, text[:mid], text[mid:], max_seq_len)
+                    pair = _tokenize_pair(enc, text[:mid], text[mid:], max_seq_len)
+                    if pair:
+                        self.inputs.append(pair[0])
+                        self.targets.append(pair[1])
 
         indices = list(range(len(self.inputs)))
         rng.shuffle(indices)
         self.inputs = [self.inputs[i] for i in indices]
         self.targets = [self.targets[i] for i in indices]
 
-    def _add(self, enc, prompt: str, answer: str, max_seq_len: int) -> None:
-        full_tokens = enc.encode(prompt + answer)
-        if len(full_tokens) > max_seq_len:
-            return
-        prompt_len = len(enc.encode(prompt))
-        tokens = torch.tensor(full_tokens, dtype=torch.long)
-        inp = tokens[:-1]
-        tgt = tokens[1:].clone()
-        if prompt_len > 1:
-            tgt[: prompt_len - 1] = IGNORE_INDEX
-        self.inputs.append(inp)
-        self.targets.append(tgt)
+    def __len__(self) -> int:
+        return len(self.inputs)
+
+    def __getitem__(self, idx: int) -> tuple[Tensor, Tensor]:
+        return self.inputs[idx], self.targets[idx]
+
+
+class EquationDataset(Dataset):
+    """Synthetic equation dataset regenerated fresh each epoch from a PRNG seed."""
+
+    def __init__(self, n: int, max_operand: int, seed: int, enc, max_seq_len: int = 512):
+        rng = random.Random(seed)
+        self.inputs: list[Tensor] = []
+        self.targets: list[Tensor] = []
+
+        for _ in range(n // 2):
+            a = rng.randint(0, max_operand)
+            b = rng.randint(0, max_operand)
+            for op in ("+", "-"):
+                ex = CoTFormatter.format(a, b, op)
+                pair = _tokenize_pair(enc, ex.prompt, ex.reasoning + ex.answer, max_seq_len)
+                if pair:
+                    self.inputs.append(pair[0])
+                    self.targets.append(pair[1])
 
     def __len__(self) -> int:
         return len(self.inputs)

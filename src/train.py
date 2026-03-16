@@ -5,18 +5,21 @@ import logging
 import math
 import re
 import random
+from datetime import datetime
 from pathlib import Path
 
 import torch
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import ConcatDataset, DataLoader, random_split
 
 from init import download_datasets
-from src.dataloading import MathCoTDataset, collate_cot, collect_texts
+from src.dataloading import EquationDataset, MathCoTDataset, collate_cot, collect_texts, generate_math_equations
 from src.model import AdditionLM
 from src.tokenization import build_tokenizer, get_tokenizer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 log = logging.getLogger(__name__)
+
+CKPT_DIR = Path("src") / "checkpoints"
 
 
 # ── Config ───────────────────────────────────────────────────────────────────
@@ -46,14 +49,15 @@ def get_lr_scheduler(
 
 
 class EarlyStopping:
-    def __init__(self, patience: int):
+    def __init__(self, patience: int, min_delta : float):
         self.patience = patience
         self.best_loss = float("inf")
+        self.min_delta = min_delta
         self.counter = 0
-
+        
     def step(self, val_loss: float) -> bool:
         """Returns True when training should stop."""
-        if val_loss < self.best_loss:
+        if val_loss < self.best_loss - self.min_delta:
             self.best_loss = val_loss
             self.counter = 0
             return False
@@ -140,6 +144,7 @@ def _log_model_attrs(model: AdditionLM, device: torch.device) -> None:
 
 
 def _save_final(
+    run_dir: Path,
     model: AdditionLM,
     cfg: dict,
     val_loss: float,
@@ -147,11 +152,7 @@ def _save_final(
     lr: float,
     enc=None,
 ) -> Path:
-    """Save model weights and config into a descriptive run directory."""
-    run_name = f"loss_{val_loss:.4f}_epochs_{epoch}_lr_{lr:.2e}"
-    run_dir = Path("src") / "checkpoints" / run_name
-    run_dir.mkdir(parents=True, exist_ok=True)
-
+    """Save model weights and config into the run directory."""
     torch.save(model.state_dict(), run_dir / "final.pt")
     with open(run_dir / "config.json", "w") as f:
         json.dump(cfg, f, indent=2)
@@ -172,25 +173,27 @@ def train(cfg: dict) -> AdditionLM:
         max_math_stories=cfg.get("max_math_stories", 500_000),
         max_tiny_stories=cfg.get("max_tiny_stories", 500_000),
     )
+    num_equations = cfg.get("num_train_examples", 300_000)
+    max_operand = cfg.get("max_operand", 999_999)
 
     # ── Tokenizer ────────────────────────────────────────────────────────
-    texts = collect_texts(datasets, max_texts=50_000, seed=cfg["seed"])
+    sample_eqs = generate_math_equations(10_000, max_operand, cfg["seed"])
+    texts = collect_texts(
+        {**datasets, "math_equations": sample_eqs}, max_texts=50_000, seed=cfg["seed"]
+    )
     enc = build_tokenizer(texts, vocab_size=cfg["vocab_size"])
     cfg["vocab_size"] = enc.n_vocab
     log.info("Tokenizer: %d vocab (WordPiece)", enc.n_vocab)
 
-    ds = MathCoTDataset(
+    static_ds = MathCoTDataset(
         datasets=datasets,
         max_seq_len=cfg["max_seq_len"],
         seed=cfg["seed"],
         enc=enc,
     )
-    val_size = max(1, int(len(ds) * cfg["val_split"]))
-    train_ds, val_ds = random_split(ds, [len(ds) - val_size, val_size])
+    val_size = max(1, int(len(static_ds) * cfg["val_split"]))
+    static_train, val_ds = random_split(static_ds, [len(static_ds) - val_size, val_size])
 
-    train_loader = DataLoader(
-        train_ds, batch_size=cfg["batch_size"], shuffle=True, collate_fn=collate_cot
-    )
     val_loader = DataLoader(
         val_ds, batch_size=cfg["batch_size"], collate_fn=collate_cot
     )
@@ -212,80 +215,100 @@ def train(cfg: dict) -> AdditionLM:
     optimizer = torch.optim.AdamW(
         model.param_groups(cfg["weight_decay"]), lr=cfg["lr"]
     )
-    total_steps = len(train_loader) * cfg["max_epochs"]
+    total_steps = math.ceil((len(static_train) + num_equations) / cfg["batch_size"]) * cfg["max_epochs"]
     scheduler = get_lr_scheduler(optimizer, cfg["warmup_steps"], total_steps)
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
 
     # ── Checkpointing & early stopping ───────────────────────────────────
-    tmp_ckpt_dir = Path("src") / "checkpoints" / "_running"
-    tmp_ckpt_dir.mkdir(parents=True, exist_ok=True)
-    stopper = EarlyStopping(cfg["patience"])
+    run_dir = CKPT_DIR / f"run_{datetime.now():%Y%m%d_%H%M%S}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    fh = logging.FileHandler(run_dir / "train.log")
+    fh.setFormatter(logging.Formatter("%(asctime)s | %(message)s"))
+    log.addHandler(fh)
+    stopper = EarlyStopping(cfg["patience"], cfg["min_delta"])
 
     # ── Loop ─────────────────────────────────────────────────────────────
     eval_every = cfg.get("eval_every", 5)
     eval_samples = cfg.get("eval_samples", 200)
-    max_operand = cfg.get("max_operand", 999_999)
 
     log_every_n_batches = cfg.get("log_every_n_batches", 50)
 
-    for epoch in range(1, cfg["max_epochs"] + 1):
-        model.train()
-        epoch_loss, n = 0.0, 0
-
-        for batch_idx, (x, y) in enumerate(train_loader, 1):
-            x, y = x.to(device), y.to(device)
-
-            with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
-                loss = model.compute_loss(x, y)
-
-            optimizer.zero_grad(set_to_none=True)
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["grad_clip"])
-            scaler.step(optimizer)
-            scaler.update()
-            scheduler.step()
-
-            batch_loss = loss.item()
-            epoch_loss += batch_loss * x.size(0)
-            n += x.size(0)
-
-            if batch_idx % log_every_n_batches == 0:
-                log.info(
-                    "  Epoch %3d | batch %5d | loss %.4f | lr %.2e",
-                    epoch, batch_idx, batch_loss, scheduler.get_last_lr()[0],
-                )
-
-        train_loss = epoch_loss / n
-        val_loss = evaluate_loss(model, val_loader, device)
-        lr = scheduler.get_last_lr()[0]
-
-        # Periodic exact-match accuracy on freshly generated problems
-        acc_str = ""
-        if epoch % eval_every == 0:
-            acc = evaluate_accuracy(
-                model, eval_samples, max_operand, device, seed=epoch, enc=enc
+    epoch = 0
+    try:
+        for epoch in range(1, cfg["max_epochs"] + 1):
+            eq_ds = EquationDataset(
+                n=num_equations,
+                max_operand=max_operand,
+                seed=cfg["seed"] + epoch,
+                enc=enc,
+                max_seq_len=cfg["max_seq_len"],
             )
-            acc_str = f" | acc {acc:.2%}"
+            train_ds = ConcatDataset([static_train, eq_ds])
+            train_loader = DataLoader(
+                train_ds, batch_size=cfg["batch_size"], shuffle=True, collate_fn=collate_cot
+            )
 
-        log.info(
-            "Epoch %3d | train %.4f | val %.4f | lr %.2e%s",
-            epoch, train_loss, val_loss, lr, acc_str,
-        )
+            model.train()
+            epoch_loss, n = 0.0, 0
 
-        # Checkpoint on best val loss
-        if val_loss <= stopper.best_loss:
-            torch.save(model.state_dict(), tmp_ckpt_dir / "best.pt")
+            for batch_idx, (x, y) in enumerate(train_loader, 1):
+                x, y = x.to(device), y.to(device)
 
-        if stopper.step(val_loss):
-            log.info("Early stopping at epoch %d", epoch)
-            break
+                with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
+                    loss = model.compute_loss(x, y)
 
-    # Restore best weights and save into descriptive run directory
-    model.load_state_dict(torch.load(tmp_ckpt_dir / "best.pt", weights_only=True))
-    final_lr = scheduler.get_last_lr()[0]
-    enc.save(tmp_ckpt_dir / "vocab.json")
-    _save_final(model, cfg, val_loss=stopper.best_loss, epoch=epoch, lr=final_lr, enc=enc)
+                optimizer.zero_grad(set_to_none=True)
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["grad_clip"])
+                scaler.step(optimizer)
+                scaler.update()
+                scheduler.step()
+
+                batch_loss = loss.item()
+                epoch_loss += batch_loss * x.size(0)
+                n += x.size(0)
+
+                if batch_idx % log_every_n_batches == 0:
+                    log.info(
+                        "  Epoch %3d | batch %5d | loss %.4f | lr %.2e",
+                        epoch, batch_idx, batch_loss, scheduler.get_last_lr()[0],
+                    )
+
+            train_loss = epoch_loss / n
+            val_loss = evaluate_loss(model, val_loader, device)
+            lr = scheduler.get_last_lr()[0]
+
+            # Periodic exact-match accuracy on freshly generated problems
+            acc_str = ""
+            if epoch % eval_every == 0:
+                acc = evaluate_accuracy(
+                    model, eval_samples, max_operand, device, seed=epoch, enc=enc
+                )
+                acc_str = f" | acc {acc:.2%}"
+
+            log.info(
+                "Epoch %3d | train %.4f | val %.4f | lr %.2e%s",
+                epoch, train_loss, val_loss, lr, acc_str,
+            )
+
+            # Checkpoint on best val loss
+            if val_loss <= stopper.best_loss:
+                torch.save(model.state_dict(), run_dir / "best.pt")
+
+            if stopper.step(val_loss):
+                log.info("Early stopping at epoch %d", epoch)
+                break
+    except KeyboardInterrupt:
+        log.info("Training interrupted at epoch %d", epoch)
+    finally:
+        best_pt = run_dir / "best.pt"
+        if best_pt.exists():
+            model.load_state_dict(torch.load(best_pt, weights_only=True))
+        final_lr = scheduler.get_last_lr()[0] if epoch > 0 else cfg["lr"]
+        _save_final(run_dir, model, cfg, val_loss=stopper.best_loss, epoch=epoch, lr=final_lr, enc=enc)
+        log.removeHandler(fh)
+        fh.close()
     return model, enc
 
 
