@@ -1,65 +1,46 @@
-"""WordPiece tokenizer via HuggingFace tokenizers."""
+"""Fixed character-level tokenizer for arithmetic CoT."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
+CHARS = [
+    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+    "+", "-", "=", " ", "\n", "c", "b", "N", "E", "G",
+    "[PAD]",
+]
 
-DIGIT_TOKENS = [str(d) for d in range(10)]
 
+class CharTokenizer:
+    """Character-level tokenizer with a fixed vocabulary for arithmetic CoT."""
 
-class WordPieceTokenizer:
-    """WordPiece tokenizer trained from a text corpus."""
-
-    def __init__(self, vocab_size: int = 512):
-        self._vocab_size = vocab_size
-        self._tokenizer: Tokenizer | None = None
+    def __init__(self):
+        self._c2i = {c: i for i, c in enumerate(CHARS)}
+        self._i2c = dict(enumerate(CHARS))
+        self.pad_id = self._c2i["[PAD]"]
 
     @property
     def n_vocab(self) -> int:
-        return self._tokenizer.get_vocab_size() if self._tokenizer else 0
-
-    def fit(self, texts: list[str]) -> WordPieceTokenizer:
-        tok = Tokenizer(models.WordPiece(unk_token="[UNK]"))
-        tok.pre_tokenizer = pre_tokenizers.Sequence([
-            pre_tokenizers.Digits(individual_digits=True),
-            pre_tokenizers.Whitespace(),
-        ])
-        tok.decoder = decoders.WordPiece()
-        trainer = trainers.WordPieceTrainer(
-            vocab_size=self._vocab_size,
-            special_tokens=["[UNK]", "[PAD]"] + DIGIT_TOKENS,
-        )
-        tok.train_from_iterator(texts, trainer=trainer)
-        self._tokenizer = tok
-        return self
+        return len(CHARS)
 
     def encode(self, text: str) -> list[int]:
-        return self._tokenizer.encode(text).ids
+        return [self._c2i[c] for c in text]
 
-    def decode(self, token_ids: list[int]) -> str:
-        return self._tokenizer.decode(token_ids, skip_special_tokens=False)
+    def decode(self, ids: list[int]) -> str:
+        return "".join(self._i2c[i] for i in ids if i != self.pad_id)
 
     def save(self, path: str | Path) -> None:
-        self._tokenizer.save(str(path))
+        with open(path, "w") as f:
+            json.dump({"chars": CHARS}, f)
 
-    def load(self, path: str | Path) -> WordPieceTokenizer:
-        self._tokenizer = Tokenizer.from_file(str(path))
+    def load(self, path: str | Path) -> CharTokenizer:
         return self
 
 
-def build_tokenizer(texts: list[str], vocab_size: int = 512) -> WordPieceTokenizer:
-    return WordPieceTokenizer(vocab_size).fit(texts)
+def build_tokenizer() -> CharTokenizer:
+    return CharTokenizer()
 
 
-def get_tokenizer(vocab_path: str | Path | None = None) -> WordPieceTokenizer:
-    tok = WordPieceTokenizer()
-    if vocab_path is not None and Path(vocab_path).exists():
-        tok.load(vocab_path)
-    return tok
-
-
-if __name__ == "__main__":
-    enc = get_tokenizer()
-    print(f"Vocab size: {enc.n_vocab}")
+def get_tokenizer(vocab_path: str | Path | None = None) -> CharTokenizer:
+    return CharTokenizer()

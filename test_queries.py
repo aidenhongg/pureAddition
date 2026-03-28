@@ -35,7 +35,6 @@ def load_model(device: torch.device) -> tuple[AdditionLM, object]:
         d_ff=cfg["d_ff"],
         max_seq_len=cfg["max_seq_len"],
         dropout=cfg["dropout"],
-        d_emb=cfg["d_emb"],
     ).to(device)
 
     model.load_state_dict(
@@ -60,11 +59,11 @@ def main() -> None:
     print(f"Loaded best.pt ({model.param_count():,} params)\n")
 
     queries = [
-        "Once upon a time, there was a little girl named Lily. She",
-        "Tom had 3 apples and his friend gave him 2 more. Now Tom had",
-        "The cat sat on the mat and looked at the",
-        "One day, a boy found a shiny coin on the ground. He picked it up and",
-        "Sara wanted to bake a cake for her mom. She mixed the flour and",
+        "123 + 456\n",
+        "999 + 1\n",
+        "500 - 123\n",
+        "1 - 200\n",
+        "9999 + 9999\n",
     ]
 
     for i, prompt in enumerate(queries, 1):

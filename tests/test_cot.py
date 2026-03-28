@@ -4,7 +4,7 @@ import unittest
 
 import torch
 
-from src.dataloading import CoTFormatter, CoTExample, MathCoTDataset, collate_cot
+from src.dataloading import CoTFormatter, CoTExample, EpochDataset, collate_cot, _generate_equation_pairs
 from src.model import AdditionLM, IGNORE_INDEX
 
 

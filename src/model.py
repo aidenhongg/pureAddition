@@ -100,20 +100,18 @@ class AdditionLM(nn.Module):
 
     def __init__(
         self,
-        vocab_size: int = 512,
-        d_model: int = 256,
-        n_heads: int = 4,
+        vocab_size: int = 21,
+        d_model: int = 320,
+        n_heads: int = 8,
         n_layers: int = 12,
-        d_ff: int = 1024,
+        d_ff: int = 1280,
         max_seq_len: int = 512,
         dropout: float = 0.1,
-        d_emb: int = 512,
     ):
         super().__init__()
         self.max_seq_len = max_seq_len
         self.d_model = d_model
-        self.tok_emb = nn.Embedding(vocab_size, d_emb)
-        self.emb_proj = nn.Linear(d_emb, d_model, bias=False)
+        self.tok_emb = nn.Embedding(vocab_size, d_model)
         self.drop = nn.Dropout(dropout)
 
         self.rope = RotaryEmbedding(d_model // n_heads, max_seq_len)
@@ -121,7 +119,7 @@ class AdditionLM(nn.Module):
             [TransformerBlock(d_model, n_heads, d_ff, dropout) for _ in range(n_layers)]
         )
         self.ln_f = nn.LayerNorm(d_model)
-        self.out_proj = nn.Linear(d_model, d_emb, bias=False)
+        self.lm_head = nn.Linear(d_model, vocab_size)
 
         self._init_weights()
 
@@ -134,10 +132,10 @@ class AdditionLM(nn.Module):
         B, T = idx.shape
         cos, sin = self.rope(T)
 
-        x = self.drop(self.emb_proj(self.tok_emb(idx)))
+        x = self.drop(self.tok_emb(idx))
         for block in self.blocks:
             x = block(x, cos, sin)
-        return F.linear(self.out_proj(self.ln_f(x)), self.tok_emb.weight)
+        return self.lm_head(self.ln_f(x))
 
     def compute_loss(self, idx: Tensor, targets: Tensor) -> Tensor:
         """Cross-entropy with prompt masking (targets=IGNORE_INDEX are ignored)."""
