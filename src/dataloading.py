@@ -257,10 +257,11 @@ def _chain_cot_reasoning(eq_str: str) -> str | None:
 def _tokenize_full(
     enc, text: str, max_seq_len: int
 ) -> tuple[Tensor, Tensor] | None:
-    """Tokenize full text for standard causal LM (no prompt masking)."""
+    """Tokenize full text for standard causal LM (no prompt masking). Truncates to max_seq_len."""
     tokens = enc.encode(text)
-    if len(tokens) < 2 or len(tokens) > max_seq_len:
+    if len(tokens) < 2:
         return None
+    tokens = tokens[:max_seq_len]
     tokens = torch.tensor(tokens, dtype=torch.long)
     return tokens[:-1], tokens[1:]
 
