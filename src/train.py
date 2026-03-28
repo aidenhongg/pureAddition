@@ -27,9 +27,10 @@ CKPT_DIR = Path("src") / "checkpoints"
 LADDER = [
     {"lang": 0.80, "eq": 0.14, "story": 0.04, "analogy": 0.02, "gate": 2.5, "max_epochs": 15},
     {"lang": 0.60, "eq": 0.22, "story": 0.14, "analogy": 0.04, "gate": 2.2, "max_epochs": 15},
-    {"lang": 0.40, "eq": 0.24, "story": 0.30, "analogy": 0.06, "gate": 1.9, "max_epochs": 15},
-    {"lang": 0.25, "eq": 0.1875, "story": 0.4875, "analogy": 0.075, "gate": 1.7, "max_epochs": 15},
-    {"lang": 0.20, "eq": 0.16, "story": 0.56, "analogy": 0.08, "gate": None, "max_epochs": 30},
+    {"lang": 0.40, "eq": 0.34, "story": 0.20, "analogy": 0.06, "gate": 1.9, "max_epochs": 15},
+    {"lang": 0.25, "eq": 0.37, "story": 0.30, "analogy": 0.08, "gate": 1.7, "max_epochs": 15},
+    {"lang": 0.20, "eq": 0.42, "story": 0.30, "analogy": 0.08, "gate": 1.5, "max_epochs": 15},
+    {"lang": 0.10, "eq": 0.49, "story": 0.33, "analogy": 0.08, "gate": None, "max_epochs": 30},
 ]
 
 
@@ -187,7 +188,7 @@ def train(cfg: dict) -> tuple[AdditionLM, object]:
 
     max_lang_ratio = max(s["lang"] for s in ladder)
     val_lang = cfg.get("val_size", 5000) // 2
-    max_stories = int(max_lang_ratio * epoch_size * 2) + val_lang
+    max_stories = int(max_lang_ratio * epoch_size * 6) + val_lang
 
     datasets = download_datasets(
         max_math_stories=cfg.get("max_math_stories", 500_000),
@@ -316,7 +317,7 @@ def train(cfg: dict) -> tuple[AdditionLM, object]:
                 lr = scheduler.get_last_lr()[0]
 
                 acc_str = ""
-                if global_epoch % eval_every == 0:
+                if True:
                     acc = evaluate_accuracy(
                         model, eval_samples, max_operand, device,
                         seed=global_epoch, enc=enc,

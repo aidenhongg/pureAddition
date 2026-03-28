@@ -18,7 +18,7 @@
     "seed": 42,
     "checkpoint_dir": "checkpoints",
 
-    "epoch_size": 100000,
+    "epoch_size": 33333,
     "val_size": 5000,
     "max_math_stories": 166666,
     "max_analogies": 500000,
