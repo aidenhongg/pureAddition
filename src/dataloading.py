@@ -140,15 +140,22 @@ def _tokenize_pair(
 Pool = list[tuple[Tensor, Tensor]]
 
 
+def _rand_with_digits(rng: random.Random, d: int) -> int:
+    """Return a random non-negative integer with exactly *d* digits."""
+    if d == 1:
+        return rng.randint(0, 9)
+    return rng.randint(10 ** (d - 1), 10 ** d - 1)
+
+
 def _generate_equation_pairs(
-    n: int, max_operand: int, seed: int, enc, max_seq_len: int,
+    n: int, max_digits: int, seed: int, enc, max_seq_len: int,
 ) -> Pool:
     """Generate *n* fresh tokenized equation pairs from a seeded PRNG."""
     rng = random.Random(seed)
     pairs: Pool = []
     while len(pairs) < n:
-        a = rng.randint(0, max_operand)
-        b = rng.randint(0, max_operand)
+        a = _rand_with_digits(rng, rng.randint(1, max_digits))
+        b = _rand_with_digits(rng, rng.randint(1, max_digits))
         op = rng.choice(["+", "-"])
         ex = CoTFormatter.format(a, b, op)
         pair = _tokenize_pair(enc, ex.prompt, ex.reasoning + ex.answer + "[EOS]", max_seq_len)
@@ -158,17 +165,17 @@ def _generate_equation_pairs(
 
 
 def build_val_set(
-    n: int, max_operand: int, seed: int, enc, max_seq_len: int,
+    n: int, max_digits: int, seed: int, enc, max_seq_len: int,
 ) -> "EpochDataset":
     """Build a fixed validation set of synthetic equations."""
-    return EpochDataset(_generate_equation_pairs(n, max_operand, seed, enc, max_seq_len))
+    return EpochDataset(_generate_equation_pairs(n, max_digits, seed, enc, max_seq_len))
 
 
 def sample_epoch(
-    epoch_size: int, epoch_seed: int, enc, max_seq_len: int, max_operand: int,
+    epoch_size: int, epoch_seed: int, enc, max_seq_len: int, max_digits: int,
 ) -> "EpochDataset":
     """Build one epoch's dataset of fresh synthetic equations."""
-    items = _generate_equation_pairs(epoch_size, max_operand, epoch_seed, enc, max_seq_len)
+    items = _generate_equation_pairs(epoch_size, max_digits, epoch_seed, enc, max_seq_len)
     random.Random(epoch_seed).shuffle(items)
     return EpochDataset(items)
 

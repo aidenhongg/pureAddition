@@ -7,7 +7,7 @@
     "max_seq_len": 512,
     "dropout": 0.1,
 
-    "lr": 3e-4,
+    "lr": 1e-3,
     "weight_decay": 0.1,
     "warmup_steps": 100,
     "batch_size": 32,
@@ -18,9 +18,9 @@
     "checkpoint_dir": "checkpoints",
 
     "epoch_size": 100000,
-    "val_size": 5000,
+    "val_size": 10000,
     "max_epochs": 100,
 
-    "max_operand": 999999,
+    "max_digits": 19,
     "eval_samples": 200
 }

@@ -87,20 +87,21 @@ def evaluate_loss(
 def evaluate_accuracy(
     model: AdditionLM,
     num_samples: int,
-    max_operand: int,
+    max_digits: int,
     device: torch.device,
     seed: int = 0,
     enc=None,
 ) -> float:
     """Generate CoT solutions and check whether the final numeric answer is correct."""
+    from src.dataloading import _rand_with_digits
     rng = random.Random(seed)
     if enc is None:
         enc = get_tokenizer()
     correct = 0
 
     for _ in range(num_samples):
-        a = rng.randint(0, max_operand)
-        b = rng.randint(0, max_operand)
+        a = _rand_with_digits(rng, rng.randint(1, max_digits))
+        b = _rand_with_digits(rng, rng.randint(1, max_digits))
         op = rng.choice(["+", "-"])
         expected = (a + b) if op == "+" else (a - b)
 
@@ -110,11 +111,9 @@ def evaluate_accuracy(
         output_ids = model.generate(idx, max_new_tokens=128, temperature=0.0, eos_token=enc.eos_id)
         output_text = enc.decode(output_ids[0].tolist())
 
-        # Extract the final answer: look for "\n= <number>" (the answer line
-        # in CoT format) anywhere in the output, taking the last match.
-        # Using \n= distinguishes the answer line from inline = in CoT steps.
-        matches = re.findall(r'\n=\s*(-?\d+)', output_text)
-        if matches and int(matches[-1]) == expected:
+        # Extract the final answer from the last "\n= <number>" line.
+        match = re.search(r'\n=\s*(-?\d+)\s*$', output_text)
+        if match and int(match.group(1)) == expected:
             correct += 1
 
     return correct / max(1, num_samples)
@@ -170,7 +169,7 @@ def train(cfg: dict) -> tuple[AdditionLM, object]:
     _log_config(cfg)
 
     # ── Data ─────────────────────────────────────────────────────────────
-    max_operand = cfg.get("max_operand", 999_999)
+    max_digits = cfg.get("max_digits", 14)
     epoch_size = cfg.get("epoch_size", 100_000)
     max_epochs = cfg.get("max_epochs", 100)
 
@@ -181,7 +180,7 @@ def train(cfg: dict) -> tuple[AdditionLM, object]:
 
     # ── Fixed validation set ─────────────────────────────────────────────
     val_ds = build_val_set(
-        cfg.get("val_size", 5000), max_operand, seed, enc, cfg["max_seq_len"]
+        cfg.get("val_size", 5000), max_digits, seed, enc, cfg["max_seq_len"]
     )
     val_loader = DataLoader(val_ds, batch_size=cfg["batch_size"], collate_fn=collate_cot)
 
@@ -227,7 +226,7 @@ def train(cfg: dict) -> tuple[AdditionLM, object]:
     try:
         for epoch in range(1, max_epochs + 1):
             train_ds = sample_epoch(
-                epoch_size, seed + epoch, enc, cfg["max_seq_len"], max_operand,
+                epoch_size, seed + epoch, enc, cfg["max_seq_len"], max_digits,
             )
             train_loader = DataLoader(
                 train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_cot
@@ -264,7 +263,7 @@ def train(cfg: dict) -> tuple[AdditionLM, object]:
             lr = scheduler.get_last_lr()[0]
 
             acc = evaluate_accuracy(
-                model, eval_samples, max_operand, device,
+                model, eval_samples, max_digits, device,
                 seed=epoch, enc=enc,
             )
 
