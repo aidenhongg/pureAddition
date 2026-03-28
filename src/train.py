@@ -110,9 +110,11 @@ def evaluate_accuracy(
         output_ids = model.generate(idx, max_new_tokens=128, temperature=0.0)
         output_text = enc.decode(output_ids[0].tolist())
 
-        # Extract the final answer after the last "= "
-        match = re.search(r"=\s*(-?\d+)\s*$", output_text)
-        if match and int(match.group(1)) == expected:
+        # Extract the final answer: look for "\n= <number>" (the answer line
+        # in CoT format) anywhere in the output, taking the last match.
+        # Using \n= distinguishes the answer line from inline = in CoT steps.
+        matches = re.findall(r'\n=\s*(-?\d+)', output_text)
+        if matches and int(matches[-1]) == expected:
             correct += 1
 
     return correct / max(1, num_samples)
