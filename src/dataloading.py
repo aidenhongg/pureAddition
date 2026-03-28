@@ -25,7 +25,7 @@ class CoTExample:
 
     @property
     def full_text(self) -> str:
-        return self.prompt + self.reasoning + self.answer
+        return self.prompt + self.reasoning + self.answer + "[EOS]"
 
 
 class CoTFormatter:
@@ -151,7 +151,7 @@ def _generate_equation_pairs(
         b = rng.randint(0, max_operand)
         op = rng.choice(["+", "-"])
         ex = CoTFormatter.format(a, b, op)
-        pair = _tokenize_pair(enc, ex.prompt, ex.reasoning + ex.answer, max_seq_len)
+        pair = _tokenize_pair(enc, ex.prompt, ex.reasoning + ex.answer + "[EOS]", max_seq_len)
         if pair:
             pairs.append(pair)
     return pairs

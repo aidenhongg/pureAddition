@@ -107,7 +107,7 @@ def evaluate_accuracy(
         prompt = f"{a} {op} {b}\n"
         prompt_ids = enc.encode(prompt)
         idx = torch.tensor([prompt_ids], dtype=torch.long, device=device)
-        output_ids = model.generate(idx, max_new_tokens=128, temperature=0.0)
+        output_ids = model.generate(idx, max_new_tokens=128, temperature=0.0, eos_token=enc.eos_id)
         output_text = enc.decode(output_ids[0].tolist())
 
         # Extract the final answer: look for "\n= <number>" (the answer line
