@@ -24,7 +24,7 @@ def load_model(device: torch.device) -> tuple[AdditionLM, object]:
     with open(run_dir / "config.json") as f:
         cfg = json.load(f)
 
-    enc = get_tokenizer(run_dir / "vocab.json")
+    enc = get_tokenizer()
     cfg["vocab_size"] = enc.n_vocab
 
     model = AdditionLM(

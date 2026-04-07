@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 
 from src.dataloading import build_val_set, collate_cot, sample_epoch
 from src.model import AdditionLM
-from src.tokenization import build_tokenizer, get_tokenizer
+from src.tokenization import build_tokenizer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 log = logging.getLogger(__name__)
@@ -48,12 +48,12 @@ def get_lr_scheduler(
 
 
 class EarlyStopping:
-    def __init__(self, patience: int, min_delta : float):
+    def __init__(self, patience: int, min_delta: float):
         self.patience = patience
         self.best_loss = float("inf")
         self.min_delta = min_delta
         self.counter = 0
-        
+
     def step(self, val_loss: float) -> bool:
         """Returns True when training should stop."""
         if val_loss < self.best_loss - self.min_delta:
@@ -96,7 +96,7 @@ def evaluate_accuracy(
     from src.dataloading import _rand_with_digits
     rng = random.Random(seed)
     if enc is None:
-        enc = get_tokenizer()
+        enc = build_tokenizer()
     correct = 0
 
     for _ in range(num_samples):

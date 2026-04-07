@@ -46,13 +46,12 @@ class CharTokenizer:
         with open(path, "w") as f:
             json.dump({"chars": CHARS}, f)
 
-    def load(self, path: str | Path) -> CharTokenizer:
-        return self
-
 
 def build_tokenizer() -> CharTokenizer:
+    """Create a fresh character-level tokenizer."""
     return CharTokenizer()
 
 
-def get_tokenizer(vocab_path: str | Path | None = None) -> CharTokenizer:
+def get_tokenizer() -> CharTokenizer:
+    """Convenience alias for ``build_tokenizer``."""
     return CharTokenizer()

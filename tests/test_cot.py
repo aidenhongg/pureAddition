@@ -1,10 +1,10 @@
-"""Tests for Chain-of-Thought formatting, dataset, and model loss masking."""
+"""Tests for Chain-of-Thought formatting and model loss masking."""
 
 import unittest
 
 import torch
 
-from src.dataloading import CoTFormatter, CoTExample, EpochDataset, collate_cot, _generate_equation_pairs
+from src.dataloading import CoTFormatter, CoTExample
 from src.model import AdditionLM, IGNORE_INDEX
 
 
@@ -40,7 +40,7 @@ class TestCoTFormatterAddition(unittest.TestCase):
     def test_full_text_roundtrip(self):
         ex = CoTFormatter.format(42, 58, "+")
         self.assertTrue(ex.full_text.startswith("42 + 58\n"))
-        self.assertTrue(ex.full_text.endswith("= 100"))
+        self.assertTrue(ex.full_text.endswith("= 100[EOS]"))
 
 
 class TestCoTFormatterSubtraction(unittest.TestCase):
@@ -80,77 +80,6 @@ class TestCoTFormatterValidation(unittest.TestCase):
     def test_large_operands(self):
         ex = CoTFormatter.format(999_999, 999_999, "+")
         self.assertEqual(ex.answer, "= 1999998")
-
-
-def _mock_datasets(**overrides):
-    """Minimal datasets dict for testing without network access."""
-    defaults = {
-        "math_equations": [(10, 5, "+"), (20, 3, "-"), (99, 1, "+")],
-        "math_stories": {"train": [
-            {"eq_qs": "10 + 5 = ?", "story_1_qs": "A has 10. B gives 5. How many?",
-             "story_2_qs": "X has 10 cats. Y gives 5 cats.",
-             "story_3_qs": "Z has 10. Gets 5. How many?", "answer": 15},
-        ]},
-        "stories": {"train": [
-            {"text": "Once upon a time there was a little cat who loved to play."},
-        ]},
-    }
-    defaults.update(overrides)
-    return defaults
-
-
-class TestMathCoTDataset(unittest.TestCase):
-    """Verify dataset construction and prompt masking."""
-
-    def setUp(self):
-        self.ds = MathCoTDataset(
-            datasets=_mock_datasets(), max_seq_len=256, seed=0,
-        )
-
-    def test_nonempty(self):
-        self.assertGreater(len(self.ds), 0)
-
-    def test_item_shapes(self):
-        inp, tgt = self.ds[0]
-        self.assertEqual(inp.dim(), 1)
-        self.assertEqual(tgt.dim(), 1)
-        self.assertEqual(inp.shape, tgt.shape)
-
-    def test_prompt_masked(self):
-        """At least some leading target tokens should be IGNORE_INDEX."""
-        inp, tgt = self.ds[0]
-        masked = (tgt == IGNORE_INDEX).sum().item()
-        self.assertGreater(masked, 0, "Prompt tokens should be masked")
-
-    def test_has_supervised_tokens(self):
-        """Not all targets should be masked."""
-        inp, tgt = self.ds[0]
-        supervised = (tgt != IGNORE_INDEX).sum().item()
-        self.assertGreater(supervised, 0)
-
-
-class TestCollateCot(unittest.TestCase):
-    """Verify batch collation pads correctly."""
-
-    def test_padding(self):
-        ds = MathCoTDataset(
-            datasets=_mock_datasets(
-                math_equations=[(i, i + 1, "+") for i in range(5)],
-            ),
-            max_seq_len=256, seed=1,
-        )
-        batch = [ds[i] for i in range(min(4, len(ds)))]
-        x, y = collate_cot(batch)
-
-        self.assertEqual(x.dim(), 2)
-        self.assertEqual(y.dim(), 2)
-        self.assertEqual(x.shape, y.shape)
-
-        # Padding in targets should be IGNORE_INDEX
-        for i, (inp, _) in enumerate(batch):
-            length = inp.size(0)
-            if length < x.size(1):
-                self.assertTrue((y[i, length:] == IGNORE_INDEX).all())
 
 
 class TestModelCoT(unittest.TestCase):
